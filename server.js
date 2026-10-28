@@ -50,7 +50,8 @@ async function deliverOtp(phone, code) {
     console.log(`[DEV OTP] ${phone} -> ${code}`);
     return true; // test mode: nothing is sent
   }
-  const to = phone.length === 12 && phone.startsWith('91') ? phone.slice(2) : phone; // BhashSMS wants 10 digits for India
+  // BHASH_SEND_91=1 sends 91 + the 10 digits (12 digits). Default sends just the 10 digits, like the Apps Script automations.
+  const to = env('BHASH_SEND_91', '') === '1' ? phone : (phone.length === 12 && phone.startsWith('91') ? phone.slice(2) : phone);
   const q = new URLSearchParams({
     user: env('BHASH_USER', 'Matrix_BWAPI'),
     pass: password,

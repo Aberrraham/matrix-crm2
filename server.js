@@ -10,7 +10,7 @@ const { sendMedia } = require('./serve');
 const mountAdmin = require('./adminApi');
 const {
   sha, clean, fail, wrap, todayIST, addDaysIST, parseId, isDate, normPhone, normEmail,
-  hashPassword, checkPassword, DUMMY_HASH, parseCookies, randomCode, limit, UNIQUE_VIOLATION,
+  hashPassword, checkPassword, DUMMY_HASH, parseCookies, randomCode, tempPassword, limit, UNIQUE_VIOLATION,
 } = require('./lib');
 
 const PROD = process.env.NODE_ENV === 'production';
@@ -435,7 +435,26 @@ app.use((err, req, res, next) => {
   fail(res, 500, 'Something went wrong. Please try again.');
 });
 
+// First-time setup without a terminal: if BOOTSTRAP_OWNER_EMAIL is set in the host's settings and no staff
+// account exists yet, make that person the owner and print a one-time password in the log (once).
+async function bootstrapOwner() {
+  const email = normEmail(process.env.BOOTSTRAP_OWNER_EMAIL);
+  if (!email) return;
+  if (await db.one('SELECT 1 FROM crm_staff LIMIT 1')) return;
+  const temp = tempPassword();
+  await db.query(
+    `INSERT INTO crm_staff (email, name, password_hash, role, must_change_password) VALUES ($1, $2, $3, 'owner', true)`,
+    [email, clean(process.env.BOOTSTRAP_OWNER_NAME || 'Owner', 80) || 'Owner', await hashPassword(temp)]
+  );
+  console.log('==============================================');
+  console.log(`OWNER CREATED: ${email}`);
+  console.log(`ONE-TIME PASSWORD: ${temp}`);
+  console.log('Log in at /admin/ and choose your own password. Then delete BOOTSTRAP_OWNER_EMAIL from the settings.');
+  console.log('==============================================');
+}
+
 db.init()
+  .then(bootstrapOwner)
   .then(() => {
     app.listen(PORT, () => {
       console.log(`Matrix CRM running at http://localhost:${PORT}  (staff dashboard: /admin/)`);

@@ -1,0 +1,21 @@
+{
+  "name": "matrix-crm",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Customer portal and CRM for Matrix Escape Rooms (Node + PostgreSQL)",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "admin": "node --env-file-if-exists=.env scripts/admin.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1157.0",
+    "busboy": "^1.6.0",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "sharp": "^0.35.5"
+  }
+}

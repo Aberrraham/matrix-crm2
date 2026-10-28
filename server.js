@@ -17,8 +17,8 @@ const PROD = process.env.NODE_ENV === 'production';
 const PORT = Number(process.env.PORT) || 3000;
 const OTP_SECRET = process.env.OTP_SECRET || 'dev-only-secret-change-me';
 
-if (PROD && (!process.env.OTP_SECRET || !process.env.BHASH_PASSWORD)) {
-  console.error('In production you must set OTP_SECRET and BHASH_PASSWORD (and BHASH_USER) in .env');
+if (PROD && (!process.env.OTP_SECRET || !(process.env.BHASH_PASSWORD || process.env.OTP_FUNCTIONS_URL))) {
+  console.error('In production you must set OTP_SECRET and either BHASH_PASSWORD (with BHASH_USER) or OTP_FUNCTIONS_URL');
   process.exit(1);
 }
 
@@ -39,6 +39,20 @@ async function makeReferralCode() {
   }
   throw new Error('Could not make a referral code');
 }
+
+// Optional: use your existing, working OTP functions (the sendOtp / verifyOtp pair your waiver page calls)
+// instead of calling BhashSMS directly. Set OTP_FUNCTIONS_URL to their base address.
+const remoteOtp = () => (process.env.OTP_FUNCTIONS_URL || '').trim().replace(/\/+$/, '');
+async function callRemote(fn, params) {
+  const q = new URLSearchParams(params);
+  const r = await fetch(`${remoteOtp()}/${fn}?${q.toString()}`, { signal: AbortSignal.timeout(15000) });
+  const text = await r.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch { /* not json */ }
+  console.log(`OTP function ${fn} answered HTTP ${r.status}: ${text.slice(0, 200).replace(/\d{6}/g, '******')}`);
+  return { ok: r.ok && data.success === true, message: data.message };
+}
+const tenDigits = (p) => (p.length === 12 && p.startsWith('91') ? p.slice(2) : p);
 
 // WhatsApp OTP through BhashSMS, same call your Apps Script automations use.
 // Settings (Render, Environment): BHASH_USER, BHASH_PASSWORD, and optionally
@@ -63,6 +77,8 @@ async function deliverOtp(phone, code) {
     Params: code, // the one blank in the template
   });
   const base = env('BHASH_URL', 'http://bhashsms.com/api/sendmsg.php');
+  const shown = new URLSearchParams(q); shown.set('pass', '***'); shown.set('Params', '******');
+  console.log('BhashSMS request: ' + base + '?' + shown.toString()); // password and code hidden
   const r = await fetch(base + '?' + q.toString(), { signal: AbortSignal.timeout(10000) });
   const body = (await r.text()).slice(0, 300);
   // Log the provider's answer (never the code or password) so a failed delivery can be diagnosed.
@@ -229,15 +245,22 @@ app.post('/api/otp/send', auth, limit('otp', 6), wrap(async (req, res) => {
     }
   }
   const code = String(crypto.randomInt(100000, 1000000));
-  let dev;
-  try { dev = await deliverOtp(phone, code); }
-  catch (e) { console.error('OTP delivery failed:', e.message); return fail(res, 502, 'We could not send the code. Please try again in a moment.'); }
+  let dev, codeHash = sha(`${OTP_SECRET}:${phone}:${code}`);
+  try {
+    if (remoteOtp()) {
+      const out = await callRemote('sendOtp', { phone: tenDigits(phone) });
+      if (!out.ok) throw new Error('OTP function refused: ' + (out.message || 'no reason given'));
+      codeHash = 'remote'; // the other service holds the code
+    } else {
+      dev = await deliverOtp(phone, code);
+    }
+  } catch (e) { console.error('OTP delivery failed:', e.message); return fail(res, 502, 'We could not send the code. Please try again in a moment.'); }
   await db.query(
     `INSERT INTO crm_otps (phone, code_hash, expires_at, attempts, last_sent, sends, window_start)
      VALUES ($1, $2, $3, 0, $4, $5, $6)
      ON CONFLICT (phone) DO UPDATE SET code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at,
        attempts = 0, last_sent = EXCLUDED.last_sent, sends = EXCLUDED.sends, window_start = EXCLUDED.window_start`,
-    [phone, sha(`${OTP_SECRET}:${phone}:${code}`), now + OTP_TTL_MS, now, sends, windowStart]
+    [phone, codeHash, now + OTP_TTL_MS, now, sends, windowStart]
   );
   res.json({ ok: true, phone, devCode: dev && !PROD ? code : undefined });
 }));
@@ -252,9 +275,14 @@ app.post('/api/otp/verify', auth, limit('otpv', 15), wrap(async (req, res) => {
     await db.query('DELETE FROM crm_otps WHERE phone = $1', [phone]);
     return fail(res, 429, 'Too many wrong tries. Please ask for a new code.');
   }
-  const a = Buffer.from(sha(`${OTP_SECRET}:${phone}:${code}`));
-  const b = Buffer.from(row.code_hash);
-  if (!crypto.timingSafeEqual(a, b)) {
+  let good;
+  if (row.code_hash === 'remote') {
+    try { good = (await callRemote('verifyOtp', { phone: tenDigits(phone), code })).ok; }
+    catch (e) { console.error('OTP check failed:', e.message); return fail(res, 502, 'We could not check the code. Please try again.'); }
+  } else {
+    good = crypto.timingSafeEqual(Buffer.from(sha(`${OTP_SECRET}:${phone}:${code}`)), Buffer.from(row.code_hash));
+  }
+  if (!good) {
     await db.query('UPDATE crm_otps SET attempts = attempts + 1 WHERE phone = $1', [phone]);
     return fail(res, 400, 'That code is not right. Please check and try again.');
   }

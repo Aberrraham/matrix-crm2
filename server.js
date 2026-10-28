@@ -44,27 +44,28 @@ async function makeReferralCode() {
 // Settings (Render, Environment): BHASH_USER, BHASH_PASSWORD, and optionally
 // BHASH_SENDER (default BUZWAP), BHASH_TEMPLATE (default waiver_tra), BHASH_URL.
 async function deliverOtp(phone, code) {
-  const password = process.env.BHASH_PASSWORD;
+  const env = (k, d) => (process.env[k] || '').trim() || d; // ignore stray spaces pasted into the host's settings
+  const password = env('BHASH_PASSWORD', '');
   if (!password) {
     console.log(`[DEV OTP] ${phone} -> ${code}`);
     return true; // test mode: nothing is sent
   }
   const to = phone.length === 12 && phone.startsWith('91') ? phone.slice(2) : phone; // BhashSMS wants 10 digits for India
   const q = new URLSearchParams({
-    user: process.env.BHASH_USER || 'Matrix_BWAPI',
+    user: env('BHASH_USER', 'Matrix_BWAPI'),
     pass: password,
-    sender: process.env.BHASH_SENDER || 'BUZWAP',
+    sender: env('BHASH_SENDER', 'BUZWAP'),
     phone: to,
-    text: process.env.BHASH_TEMPLATE || 'waiver_tra',
+    text: env('BHASH_TEMPLATE', 'waiver_tra'),
     priority: 'wa',
     stype: 'normal',
     Params: code, // the one blank in the template
   });
-  const base = process.env.BHASH_URL || 'http://bhashsms.com/api/sendmsg.php';
+  const base = env('BHASH_URL', 'http://bhashsms.com/api/sendmsg.php');
   const r = await fetch(base + '?' + q.toString(), { signal: AbortSignal.timeout(10000) });
   const body = (await r.text()).slice(0, 300);
   // Log the provider's answer (never the code or password) so a failed delivery can be diagnosed.
-  console.log(`BhashSMS answer for ${to.slice(0, 2)}******${to.slice(-2)}: HTTP ${r.status} ${body}`);
+  console.log(`BhashSMS answer for ${to.slice(0, 2)}******${to.slice(-2)} (${to.length} digits, template ${q.get('text')}, sender ${q.get('sender')}, user ${q.get('user')}): HTTP ${r.status} ${body}`);
   if (!r.ok || /invalid|error|fail|not\s+(valid|authori|approved)|insufficient/i.test(body)) {
     throw new Error('BhashSMS rejected the message: ' + body);
   }

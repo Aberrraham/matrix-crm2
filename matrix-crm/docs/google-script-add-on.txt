@@ -1,0 +1,36 @@
+// ===== ADD THIS TO YOUR CUSTOMER DATA APPS SCRIPT (the one with handleWaiver) =====
+// It lets the CRM read the "FY-26 Q3" tab. Nothing is changed or deleted in your sheet.
+
+// 1) Make up a long random password (40+ letters/numbers) and put it here.
+//    Put the SAME text on Render as SHEET_SYNC_TOKEN.
+const SYNC_TOKEN = "PUT-YOUR-LONG-RANDOM-TEXT-HERE";
+
+// 2) Paste this whole function anywhere in the file.
+function listWaivers_(params) {
+  var out = function (o) {
+    return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+  };
+  if (!params.token || params.token !== SYNC_TOKEN) return out({ status: "error", message: "Wrong token" });
+  var sheet = SpreadsheetApp.openById(SPREADSHEET_ID).getSheetByName(SHEET_NAME);
+  if (!sheet) return out({ status: "error", message: 'Tab "' + SHEET_NAME + '" not found' });
+  var after = Math.max(1, parseInt(params.after, 10) || 1);
+  var last = sheet.getLastRow();
+  var start = after + 1;
+  var LIMIT = 300;
+  if (start > last) return out({ status: "ok", rows: [], more: false });
+  var n = Math.min(LIMIT, last - start + 1);
+  var values = sheet.getRange(start, 1, n, 24).getDisplayValues();
+  var rows = values.map(function (v, i) { return { row: start + i, values: v }; });
+  return out({ status: "ok", rows: rows, more: start + n - 1 < last });
+}
+
+// 3) In your existing doGet(e) function, add these 2 lines at the very top (right after "var params = ..."):
+//      if (params.action === "waivers") return listWaivers_(params);
+//    The top of doGet then looks like:
+//      function doGet(e) {
+//        var params = (e && e.parameter) ? e.parameter : {};
+//        if (params.action === "waivers") return listWaivers_(params);
+//        if (params.action !== "options") { ...
+//
+// 4) Click Deploy -> Manage deployments -> pencil icon -> Version: "New version" -> Deploy.
+//    (The web app address stays the same.)
